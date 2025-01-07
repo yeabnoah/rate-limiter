@@ -1,56 +1,65 @@
 import { Request, Response, NextFunction } from "express";
+import { createClient } from "redis";
+import { config } from "../config";
 
-interface RequestQueue {
-  clientIp: string;
-  request: Request;
-  response: Response;
-  next: NextFunction;
+const redisClient = createClient({
+  url: config.redis.url
+});
+
+interface RateLimitConfig {
+  limit: number;
+  timeWindow: number;
 }
 
-interface RequestStore {
-  [key: string]: number[];
-}
+redisClient.connect().catch(console.error);
 
-const requestStore: RequestStore = {};
-const requestQueue: RequestQueue[] = [];
-
-export const rateLimiterWithQueue = (limit: number, timeWindow: number) => {
-  setInterval(() => {
-    if (requestQueue.length > 0) {
-      const { clientIp, request, response, next } = requestQueue.shift()!;
-
+export const rateLimiter = (config: RateLimitConfig) => {
+  return async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const clientIp = req.ip as string;
+      const key = `ratelimit:${clientIp}`;
+      
+      const requests = await redisClient.lRange(key, 0, -1);
       const currentTime = Date.now();
-
-      requestStore[clientIp] = requestStore[clientIp].filter(
-        (timestamp) => currentTime - timestamp <= timeWindow
-      );
-
-      if (requestStore[clientIp].length < limit) {
-        requestStore[clientIp].push(currentTime);
-        next();
-      } else {
-        requestQueue.push({ clientIp, request, response, next });
+      
+      
+      const recentRequests = requests
+        .map(Number)
+        .filter(timestamp => currentTime - timestamp <= config.timeWindow);
+      
+      if (recentRequests.length >= config.limit) {
+        const oldestRequest = Math.min(...recentRequests);
+        const resetTime = oldestRequest + config.timeWindow;
+        const timeToWait = resetTime - currentTime;
+        
+        res.set({
+          'X-RateLimit-Limit': config.limit,
+          'X-RateLimit-Remaining': 0,
+          'X-RateLimit-Reset': Math.ceil(resetTime / 1000),
+          'Retry-After': Math.ceil(timeToWait / 1000)
+        });
+        
+        return res.status(429).json({
+          error: 'Too Many Requests',
+          message: `Rate limit exceeded. Try again in ${Math.ceil(timeToWait / 1000)} seconds`
+        });
       }
-    }
-  }, 100);
-
-  return (req: Request, res: Response, next: NextFunction): void => {
-    const clientIp = req.ip as string;
-    const currentTime = Date.now();
-
-    if (!requestStore[clientIp!]) {
-      requestStore[clientIp!] = [];
-    }
-
-    requestStore[clientIp!] = requestStore[clientIp!].filter(
-      (timestamp) => currentTime - timestamp <= timeWindow
-    );
-
-    if (requestStore[clientIp!].length < limit) {
-      requestStore[clientIp!].push(currentTime);
+      
+      // Add current timestamp and trim old ones
+      await redisClient.lPush(key, currentTime.toString());
+      await redisClient.lTrim(key, 0, config.limit - 1);
+      await redisClient.expire(key, Math.ceil(config.timeWindow / 1000));
+      
+      res.set({
+        'X-RateLimit-Limit': config.limit,
+        'X-RateLimit-Remaining': config.limit - recentRequests.length - 1,
+        'X-RateLimit-Reset': Math.ceil((currentTime + config.timeWindow) / 1000)
+      });
+      
       next();
-    } else {
-      requestQueue.push({ clientIp, request: req, response: res, next });
+    } catch (error) {
+      console.error('Rate limiter error:', error);
+      next(error);
     }
   };
 };
