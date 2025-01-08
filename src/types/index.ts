@@ -1,7 +1,7 @@
 export interface RateLimitConfig {
   strategy: 'fixed-window' | 'sliding-window' | 'token-bucket';
   requestCount: number;
-  timeWindow: number; // in milliseconds
+  timeWindow: number;
   maxQueueSize?: number;
 }
 

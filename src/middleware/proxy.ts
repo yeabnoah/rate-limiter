@@ -18,13 +18,12 @@ export const createAppProxy = async (req: AuthenticatedRequest, res: Response, n
       });
     }
 
-    // Apply rate limiting middleware
+    
     const limiter = rateLimiter({
       limit: app.rateLimitConfig.requestCount,
       timeWindow: app.rateLimitConfig.timeWindow
     });
 
-    // Apply rate limiting before proxying
     await limiter(req, res, () => {
       const proxy = createProxyMiddleware({
         target: app.baseUrl,
@@ -33,7 +32,6 @@ export const createAppProxy = async (req: AuthenticatedRequest, res: Response, n
           [`^/apis/${appId}`]: '',
         },
         onProxyReq: (proxyReq, req) => {
-          // Copy original request body
           if (req.body) {
             const bodyData = JSON.stringify(req.body);
             proxyReq.setHeader('Content-Type', 'application/json');

@@ -45,7 +45,6 @@ export const rateLimiter = (config: RateLimitConfig) => {
         });
       }
       
-      // Add current timestamp and trim old ones
       await redisClient.lPush(key, currentTime.toString());
       await redisClient.lTrim(key, 0, config.limit - 1);
       await redisClient.expire(key, Math.ceil(config.timeWindow / 1000));
