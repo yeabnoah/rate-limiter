@@ -1,32 +1,43 @@
-import express, {Request, Response, NextFunction} from "express";
-import { rateLimiter } from "./middleware/ratelimiter";
-import { proxyMiddleware } from "./middleware/proxy";
-import { config } from "./config";
+import express from 'express';
+import mongoose from 'mongoose';
+import { config } from './config';
+import authRoutes from './routes/auth';
+import appRoutes from './routes/apps';
+import { createAppProxy } from './middleware/proxy';
+import { authenticateApiKey } from './middleware/auth';
 
 const app = express();
 
+// Middleware
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-app.get("/health", (req, res) => {
-  res.status(200).json({ status: "healthy" });
-});
+// Connect to MongoDB
+mongoose.connect(config?.mongodb?.url)
+  .then(() => console.log('Connected to MongoDB'))
+  .catch(err => {
+    console.error('MongoDB connection error:', err);
+    process.exit(1);
+  });
 
-app.use("/api", rateLimiter({
-  limit: config.rateLimit.defaultLimit,
-  timeWindow: config.rateLimit.defaultTimeWindow
-}), proxyMiddleware);
+// Routes
+app.use('/auth', authRoutes);
+app.use('/apps', appRoutes);
 
-app.use((err: Error, req: Request, res: Response, next: NextFunction) => {
+// Proxy endpoint
+app.use('/apis/:appId/*', authenticateApiKey, createAppProxy);
+
+// Error handling
+app.use((err: Error, req: express.Request, res: express.Response, next: express.NextFunction) => {
   console.error(err.stack);
   res.status(500).json({
-    error: "Internal Server Error",
-    message: err.message
+    error: 'Internal Server Error',
+    message: 'Something went wrong'
   });
 });
 
-const port = config.port;
-app.listen(port, () => {
-  console.log(`Rate Limiting Proxy API is running on http://localhost:${port}`);
-  console.log(`Forwarding requests to: ${config.targetApi.url}`);
+// Start server
+const PORT = config?.server?.port || 3000;
+app.listen(PORT, () => {
+  console.log(`Server is running on port ${PORT}`);
 });
